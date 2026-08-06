@@ -1,0 +1,35 @@
+# Ollama tourne volontairement SUR TA MACHINE (pas dans un conteneur) :
+# containeriser le LLM n'apporterait aucun bénéfice ici et ajouterait une
+# couche de virtualisation supplémentaire sur un modèle déjà lent sur CPU.
+# Avant de lancer : `ollama serve` doit tourner sur ta machine hôte.
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8000:8000"
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - APP_ENV=production
+      - CORS_ORIGINS=http://localhost:8501,http://127.0.0.1:8501
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
+    environment:
+      - API_URL=http://api:8000/api
+    volumes:
+      - ./data:/app/data

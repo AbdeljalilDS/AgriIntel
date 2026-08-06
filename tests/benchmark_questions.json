@@ -1,0 +1,22 @@
+[
+  {
+    "id": "concurrents_directs",
+    "question": "Quels sont les concurrents directs de Les Domaines Agricoles ?",
+    "criteres": ["entreprises présentes dans le contexte", "justification", "source", "confiance"]
+  },
+  {
+    "id": "technologies",
+    "question": "Quelles technologies agricoles sont documentées ?",
+    "criteres": ["technologies présentes dans les faits", "citations"]
+  },
+  {
+    "id": "statistiques",
+    "question": "Combien d'entités et de sources ont été analysées ?",
+    "criteres": ["statistiques calculées", "périmètre explicite"]
+  },
+  {
+    "id": "document",
+    "question": "Quel est l'objectif principal du document fourni ?",
+    "criteres": ["réponse issue du document", "nom du document", "passage justificatif"]
+  }
+]

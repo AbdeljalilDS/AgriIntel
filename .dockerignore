@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+.git/
+.env
+data/processed/*
+data/memoire.sqlite3
+logs/
+.pytest_cache/

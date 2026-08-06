@@ -1,0 +1,59 @@
+# Secrets — ne jamais committer
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+credentials.json
+
+# Environnement Python
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Caches et outils
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.cache/
+
+# Données locales (optionnel — décommenter pour exclure toute la base)
+# data/
+# logs/
+
+# Bases SQLite locales — exclure (données locales, potentiellement volumineuses)
+data/memoire.sqlite3
+data/jobs.sqlite3
+
+# Résultats JSON et rapports générés (locaux, reproduisibles)
+data/processed/
+data/raw/
+
+# Logs locaux (audit, agent)
+logs/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Playwright
+.playwright/
