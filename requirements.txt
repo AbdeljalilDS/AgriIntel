@@ -1,21 +1,45 @@
+# Core framework
+fastapi
+uvicorn[standard]
+pydantic>=2.0
+pydantic-settings
+langgraph
+
+# LLM & AI
+httpx
+tenacity
+
+# Search & Scraping
 requests
 beautifulsoup4
 trafilatura
 feedparser
-pydantic
-pydantic-settings
-tenacity
-python-dotenv
-pytest
-httpx
 playwright
 pdfplumber
+duckduckgo-search
+lxml
+lxml[html_clean]
+
+# Data & Storage
 numpy
-fastapi
-uvicorn
-streamlit
+aiosqlite
+langchain-text-splitters
+
+# Export
 fpdf2
 openpyxl
 pandas
-langgraph
-duckduckgo-search
+
+# UI
+streamlit
+
+# Utils
+python-dotenv
+
+# Testing
+pytest
+pytest-asyncio
+
+# Optional (providers premium)
+# Uncomment if you have API keys:
+# google-search-results  # SerpAPI

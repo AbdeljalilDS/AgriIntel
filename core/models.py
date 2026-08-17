@@ -97,12 +97,16 @@ class EntiteAnalysee(BaseModel):
 
     forces: list[str] = Field(default_factory=list)
     faiblesses: list[str] = Field(default_factory=list)
+    opportunites: list[str] = Field(default_factory=list)
+    menaces: list[str] = Field(default_factory=list)
+    marches_cibles: list[str] = Field(default_factory=list)
 
     fondateurs: list[str] = Field(default_factory=list)
     annee_fondation: Optional[str] = None
     stade_financement: Optional[str] = None
     financement_leve: Optional[str] = None
     investisseurs: list[str] = Field(default_factory=list)
+    incubateurs: list[str] = Field(default_factory=list)
 
     source_url: str
     score_pertinence: Optional[float] = None
@@ -131,7 +135,8 @@ class EntiteAnalysee(BaseModel):
     @field_validator(
         "produits_services", "pays_export",
         "certifications", "partenaires", "reseaux_sociaux", "forces", "faiblesses",
-        "fondateurs", "investisseurs",
+        "opportunites", "menaces", "marches_cibles",
+        "fondateurs", "investisseurs", "incubateurs",
         mode="before",
     )
     @classmethod

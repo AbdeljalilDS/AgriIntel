@@ -1,23 +1,16 @@
 """Mémoire long terme — SQLite + similarité cosinus en numpy.
 
-Rôle : le RAG du projet. Avant de chercher sur le web, l'agent peut
-interroger cette mémoire pour voir s'il connaît déjà une information
-(même formulée différemment — "Oracle" retrouve "Oracle Corporation"
-grâce aux embeddings). Persiste entre les exécutions (fichier .sqlite3
-sur le disque), contrairement à la mémoire de conversation qui elle est
-perdue à chaque redémarrage.
-
-Choix technique : pas de Qdrant/FAISS. À l'échelle de ce projet (quelques
-centaines d'entités, pas de millions), SQLite + numpy fait exactement le
-même travail sans service supplémentaire à faire tourner sur une machine
-à 8 Go de RAM.
+Version Asynchrone : Utilise aiosqlite pour ne pas bloquer FastAPI.
+Les opérations Numpy sur de gros vecteurs sont déléguées à un thread
+pour garder la boucle d'événements (event loop) très réactive.
 """
+import asyncio
 import json
 import re
-import sqlite3
 import unicodedata
 from pathlib import Path
 
+import aiosqlite
 import numpy as np
 
 from config.settings import settings
@@ -26,10 +19,10 @@ from core.logger import get_logger
 logger = get_logger(__name__)
 
 
-def _connexion() -> sqlite3.Connection:
+async def _connexion() -> aiosqlite.Connection:
     Path(settings.memoire_db).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(settings.memoire_db)
-    conn.execute(
+    conn = await aiosqlite.connect(settings.memoire_db)
+    await conn.execute(
         """
         CREATE TABLE IF NOT EXISTS entites (
             cle TEXT PRIMARY KEY,
@@ -40,7 +33,7 @@ def _connexion() -> sqlite3.Connection:
         )
         """
     )
-    conn.execute(
+    await conn.execute(
         """
         CREATE TABLE IF NOT EXISTS preuves (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,36 +47,34 @@ def _connexion() -> sqlite3.Connection:
         )
         """
     )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_preuves_type ON preuves(type_fait)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_preuves_source ON preuves(source_url)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_preuves_date ON preuves(date_collecte)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_preuves_type ON preuves(type_fait)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_preuves_source ON preuves(source_url)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_preuves_date ON preuves(date_collecte)")
+    await conn.commit()
     return conn
 
 
-def enregistrer_preuves(cle_entite: str, preuves: list[dict]) -> None:
-    """Indexe des faits atomiques avec leurs preuves et embeddings."""
+async def enregistrer_preuves(cle_entite: str, preuves: list[dict]) -> None:
     if not preuves:
         return
-    conn = _connexion()
-    conn.execute("DELETE FROM preuves WHERE cle_entite = ?", (cle_entite,))
-    for preuve in preuves:
-        embedding = preuve.get("embedding")
-        emb_bytes = np.array(embedding, dtype=np.float32).tobytes() if embedding else None
-        conn.execute(
-            """INSERT INTO preuves
-            (cle_entite, type_fait, texte, source_url, date_collecte, confiance, embedding)
-            VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (cle_entite, preuve["type_fait"], preuve["texte"], preuve["source_url"], preuve.get("date_collecte"), preuve.get("confiance"), emb_bytes),
-        )
-    conn.commit()
-    conn.close()
+    conn = await _connexion()
+    try:
+        await conn.execute("DELETE FROM preuves WHERE cle_entite = ?", (cle_entite,))
+        for preuve in preuves:
+            embedding = preuve.get("embedding")
+            emb_bytes = np.array(embedding, dtype=np.float32).tobytes() if embedding else None
+            await conn.execute(
+                """INSERT INTO preuves
+                (cle_entite, type_fait, texte, source_url, date_collecte, confiance, embedding)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (cle_entite, preuve["type_fait"], preuve["texte"], preuve["source_url"], preuve.get("date_collecte"), preuve.get("confiance"), emb_bytes),
+            )
+        await conn.commit()
+    finally:
+        await conn.close()
 
 
-def rechercher_preuves(requete: str, embedding_requete: list[float] | None, top_k: int = 8, seuil: float = 0.12) -> list[dict]:
-    """Recherche des faits atomiques, plus precisement qu'une fiche entite."""
-    conn = _connexion()
-    lignes = conn.execute("SELECT type_fait, texte, source_url, date_collecte, confiance, embedding FROM preuves").fetchall()
-    conn.close()
+def _calcul_preuves(lignes: list, requete: str, embedding_requete: list[float] | None, top_k: int, seuil: float) -> list[dict]:
     termes = _normaliser_termes(requete)
     vecteur_requete = np.array(embedding_requete, dtype=np.float32) if embedding_requete else None
     resultats = []
@@ -102,6 +93,7 @@ def rechercher_preuves(requete: str, embedding_requete: list[float] | None, top_
             deja_vus.add(cle)
             resultats.append({"type": type_fait, "texte": texte, "source": source_url, "date": date_collecte, "confiance": confiance, "score": round(score, 4)})
     resultats.sort(key=lambda item: (item["score"], item["confiance"] or 0), reverse=True)
+    
     selection = []
     sources = {}
     for resultat in resultats:
@@ -114,44 +106,83 @@ def rechercher_preuves(requete: str, embedding_requete: list[float] | None, top_
     return selection
 
 
-def enregistrer(cle: str, nom: str, data_json: str, embedding: list[float] | None) -> None:
-    """Ajoute ou met à jour une entité en mémoire persistante."""
-    conn = _connexion()
-    emb_bytes = np.array(embedding, dtype=np.float32).tobytes() if embedding else None
-    conn.execute(
-        """
-        INSERT INTO entites (cle, nom, data_json, embedding, date_maj)
-        VALUES (?, ?, ?, ?, datetime('now'))
-        ON CONFLICT(cle) DO UPDATE SET
-            data_json = excluded.data_json,
-            embedding = excluded.embedding,
-            date_maj = excluded.date_maj
-        """,
-        (cle, nom, data_json, emb_bytes),
-    )
-    conn.commit()
-    conn.close()
+async def rechercher_preuves(requete: str, embedding_requete: list[float] | None, top_k: int = 8, seuil: float = 0.12) -> list[dict]:
+    conn = await _connexion()
+    try:
+        async with conn.execute("SELECT type_fait, texte, source_url, date_collecte, confiance, embedding FROM preuves") as cursor:
+            lignes = await cursor.fetchall()
+    finally:
+        await conn.close()
+    
+    # Délégation au threadpool pour ne pas bloquer l'event loop avec Numpy
+    return await asyncio.to_thread(_calcul_preuves, lignes, requete, embedding_requete, top_k, seuil)
+
+
+async def enregistrer(cle: str, nom: str, data_json: str, embedding: list[float] | None) -> None:
+    conn = await _connexion()
+    try:
+        emb_bytes = np.array(embedding, dtype=np.float32).tobytes() if embedding else None
+        await conn.execute(
+            """
+            INSERT INTO entites (cle, nom, data_json, embedding, date_maj)
+            VALUES (?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(cle) DO UPDATE SET
+                data_json = excluded.data_json,
+                embedding = excluded.embedding,
+                date_maj = excluded.date_maj
+            """,
+            (cle, nom, data_json, emb_bytes),
+        )
+        await conn.commit()
+    finally:
+        await conn.close()
     logger.info(f"Mémoire mise à jour : {nom}")
 
 
-def lister_tout() -> list[dict]:
-    conn = _connexion()
-    lignes = conn.execute("SELECT data_json FROM entites").fetchall()
-    conn.close()
+async def lister_tout() -> list[dict]:
+    conn = await _connexion()
+    try:
+        async with conn.execute("SELECT data_json FROM entites") as cursor:
+            lignes = await cursor.fetchall()
+    finally:
+        await conn.close()
     return [json.loads(l[0]) for l in lignes]
 
 
-def rechercher_similaire(embedding_requete: list[float], top_k: int = 5) -> list[dict]:
-    """RAG : retrouve les entités les plus proches sémantiquement d'une
-    requête, même sans correspondance exacte de mots."""
-    if not embedding_requete:
-        return []
-    conn = _connexion()
-    lignes = conn.execute("SELECT nom, data_json, embedding FROM entites WHERE embedding IS NOT NULL").fetchall()
-    conn.close()
-    if not lignes:
-        return []
+async def compter_preuves() -> int:
+    conn = await _connexion()
+    try:
+        async with conn.execute("SELECT COUNT(*) FROM preuves") as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+    finally:
+        await conn.close()
 
+
+async def lister_dernieres_preuves(limite: int = 8) -> list[dict]:
+    conn = await _connexion()
+    try:
+        async with conn.execute(
+            "SELECT cle_entite, type_fait, texte, source_url, date_collecte, confiance FROM preuves ORDER BY id DESC LIMIT ?",
+            (limite,),
+        ) as cursor:
+            lignes = await cursor.fetchall()
+            return [
+                {
+                    "cle_entite": l[0],
+                    "type_fait": l[1],
+                    "texte": l[2],
+                    "source_url": l[3],
+                    "date_collecte": l[4],
+                    "confiance": l[5],
+                }
+                for l in lignes
+            ]
+    finally:
+        await conn.close()
+
+
+def _calcul_similaire(lignes: list, embedding_requete: list[float], top_k: int) -> list[dict]:
     vecteur_requete = np.array(embedding_requete, dtype=np.float32)
     norme_requete = np.linalg.norm(vecteur_requete)
     resultats = []
@@ -171,6 +202,22 @@ def rechercher_similaire(embedding_requete: list[float], top_k: int = 5) -> list
     return [_ajouter_score(json.loads(d), score, date) for score, d, date in resultats[:top_k]]
 
 
+async def rechercher_similaire(embedding_requete: list[float], top_k: int = 5) -> list[dict]:
+    if not embedding_requete:
+        return []
+    conn = await _connexion()
+    try:
+        async with conn.execute("SELECT nom, data_json, embedding FROM entites WHERE embedding IS NOT NULL") as cursor:
+            lignes = await cursor.fetchall()
+    finally:
+        await conn.close()
+        
+    if not lignes:
+        return []
+
+    return await asyncio.to_thread(_calcul_similaire, lignes, embedding_requete, top_k)
+
+
 def _normaliser_termes(texte: str) -> set[str]:
     texte = unicodedata.normalize("NFKD", texte.lower()).encode("ascii", "ignore").decode()
     return {mot for mot in re.findall(r"[a-z0-9]+", texte) if len(mot) > 3}
@@ -184,11 +231,7 @@ def _ajouter_score(data: dict, score: float, date: str | None) -> dict:
     return data
 
 
-def rechercher_hybride(requete: str, embedding_requete: list[float] | None, top_k: int = 5, seuil: float = 0.12) -> list[dict]:
-    """Combine similarite vectorielle et correspondance lexicale explicable."""
-    conn = _connexion()
-    lignes = conn.execute("SELECT nom, data_json, embedding, date_maj FROM entites").fetchall()
-    conn.close()
+def _calcul_hybride(lignes: list, requete: str, embedding_requete: list[float] | None, top_k: int, seuil: float) -> list[dict]:
     termes_requete = _normaliser_termes(requete)
     vecteur_requete = np.array(embedding_requete, dtype=np.float32) if embedding_requete else None
     resultats = []
@@ -209,13 +252,25 @@ def rechercher_hybride(requete: str, embedding_requete: list[float] | None, top_
     return [_ajouter_score(data, score, date) for score, data, date in resultats[:top_k]]
 
 
-def rechercher_par_mot_cle(mot_cle: str, top_k: int = 5) -> list[dict]:
-    """Repli automatique si le modèle d'embedding n'est pas disponible —
-    moins précis (correspondance exacte de texte) mais ne casse rien."""
-    conn = _connexion()
-    lignes = conn.execute(
-        "SELECT data_json FROM entites WHERE nom LIKE ? OR data_json LIKE ? LIMIT ?",
-        (f"%{mot_cle}%", f"%{mot_cle}%", top_k),
-    ).fetchall()
-    conn.close()
+async def rechercher_hybride(requete: str, embedding_requete: list[float] | None, top_k: int = 5, seuil: float = 0.12) -> list[dict]:
+    conn = await _connexion()
+    try:
+        async with conn.execute("SELECT nom, data_json, embedding, date_maj FROM entites") as cursor:
+            lignes = await cursor.fetchall()
+    finally:
+        await conn.close()
+    
+    return await asyncio.to_thread(_calcul_hybride, lignes, requete, embedding_requete, top_k, seuil)
+
+
+async def rechercher_par_mot_cle(mot_cle: str, top_k: int = 5) -> list[dict]:
+    conn = await _connexion()
+    try:
+        async with conn.execute(
+            "SELECT data_json FROM entites WHERE nom LIKE ? OR data_json LIKE ? LIMIT ?",
+            (f"%{mot_cle}%", f"%{mot_cle}%", top_k),
+        ) as cursor:
+            lignes = await cursor.fetchall()
+    finally:
+        await conn.close()
     return [json.loads(l[0]) for l in lignes]
