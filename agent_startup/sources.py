@@ -43,11 +43,12 @@ async def rechercher_tavily(requete: str, nb_resultats: int | None = None, clien
                 "include_answer": False,
                 "include_raw_content": True,
             },
-            timeout=settings.request_timeout,
+            timeout=12,
         )
+        if response.status_code in (429, 432):
+            return []
         response.raise_for_status()
-    except httpx.RequestError as exc:
-        logger.warning(f"Échec Tavily pour '{requete}': {exc}")
+    except Exception as exc:
         return []
     finally:
         if not client:

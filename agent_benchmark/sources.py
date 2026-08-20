@@ -238,6 +238,8 @@ class TavilyProvider(SearchProvider):
             logger.warning("Quota Tavily épuisé")
             return []
         n = max_results or self.default_max
+        if getattr(self, "_quota_depasse", False):
+            return []
         try:
             r = await self._client.post(
                 "https://api.tavily.com/search",
@@ -249,8 +251,12 @@ class TavilyProvider(SearchProvider):
                     "include_answer": False,
                     "include_raw_content": False,
                 },
-                timeout=20,
+                timeout=12,
             )
+            if r.status_code in (429, 432):
+                logger.info("Tavily : quota/limite mensuelle atteinte (432/429) -> repli automatique DuckDuckGo.")
+                self._quota_depasse = True
+                return []
             r.raise_for_status()
             data = r.json()
             consommer("tavily", settings.tavily_monthly_limit)
@@ -260,7 +266,9 @@ class TavilyProvider(SearchProvider):
                 resultats.append(item)
             return _normaliser(resultats)
         except Exception as exc:
-            logger.warning(f"Tavily error: {exc}")
+            if "432" in str(exc) or "429" in str(exc):
+                self._quota_depasse = True
+            logger.debug(f"Tavily non disponible : {exc}")
             return []
 
 

@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     llm_timeout: int = 300
 
     groq_api_key: str = ""
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = "openai/gpt-oss-120b"
 
     ollama_num_predict_chat: int = 280
     ollama_num_predict_agent: int = 400

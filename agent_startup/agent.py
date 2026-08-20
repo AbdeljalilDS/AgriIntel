@@ -63,7 +63,17 @@ class StartupAgent:
     def _extraire_nom_outil(appel: dict) -> str:
         fn = appel.get("function", {})
         if isinstance(fn, dict):
-            return str(fn.get("name", "")).strip()
+            raw_name = str(fn.get("name", "")).strip()
+            raw_clean = raw_name.lower().replace("é", "e").replace("è", "e").replace("-", "_")
+            if "recherch" in raw_clean and "web" in raw_clean:
+                return "rechercher_web"
+            if "recherch" in raw_clean and "memoir" in raw_clean:
+                return "rechercher_memoire"
+            if "lire" in raw_clean or "page" in raw_clean:
+                return "lire_page"
+            if "enregistr" in raw_clean or "startup" in raw_clean or "entreprise" in raw_clean:
+                return "enregistrer_startup"
+            return raw_name
         return ""
 
     @staticmethod

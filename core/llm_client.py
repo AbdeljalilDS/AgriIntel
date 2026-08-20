@@ -211,13 +211,18 @@ class GroqClient(LLMClient):
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
-        models_to_try = [self.model, "llama-3.1-8b-instant", "llama3-70b-8192", "mixtral-8x7b-32768"]
-        if self.model in models_to_try:
-            models_to_try.remove(self.model)
-        models_to_try.insert(0, self.model)
+        # Modèles actifs et opérationnels sur votre compte Groq
+        models_to_try = [self.model, "openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b"]
+        # Déduplication en préservant l'ordre
+        vus = set()
+        models_uniques = []
+        for m in models_to_try:
+            if m and m not in vus:
+                vus.add(m)
+                models_uniques.append(m)
 
         derniere_erreur = None
-        for model_name in models_to_try:
+        for model_name in models_uniques:
             payload: dict = {"model": model_name, "messages": messages, "temperature": 0.1}
             if json_mode:
                 payload["response_format"] = {"type": "json_object"}
@@ -233,12 +238,16 @@ class GroqClient(LLMClient):
                             logger.warning(f"Groq 429 sur {model_name} (tentative {tentative+1}) -> attente {2 * (tentative+1)}s...")
                             await asyncio.sleep(2.0 * (tentative + 1))
                             continue
+                        if response.status_code in (400, 404):
+                            logger.warning(f"Groq {response.status_code} sur {model_name} : {response.text}")
+                            derniere_erreur = response.text
+                            break
                         response.raise_for_status()
                         duree = time.perf_counter() - debut
                         logger.info(f"Groq generate : {duree:.1f}s ({model_name})")
                         return response.json()["choices"][0]["message"].get("content", "") or ""
                 except httpx.HTTPStatusError as exc:
-                    derniere_erreur = exc
+                    derniere_erreur = f"{exc} ({exc.response.text if hasattr(exc, 'response') else ''})"
                     if exc.response.status_code == 429:
                         await asyncio.sleep(2.0)
                         continue
@@ -260,18 +269,22 @@ class GroqClient(LLMClient):
         err_str = str(derniere_erreur)
         if "getaddrinfo" in err_str or "11001" in err_str or "Connect" in err_str:
             raise LLMError(f"Problème de connexion réseau / DNS vers Groq ({err_str}). Vérifiez votre accès internet.")
-        raise LLMError(f"Quota Groq temporairement atteint sur les modèles disponibles : {derniere_erreur}")
+        raise LLMError(f"Erreur Groq sur les modèles disponibles : {derniere_erreur}")
 
     async def chat_avec_outils(self, messages: list[dict], tools: list[dict]) -> dict:
-        models_to_try = [self.model, "llama-3.1-8b-instant", "llama3-70b-8192"]
-        if self.model in models_to_try:
-            models_to_try.remove(self.model)
-        models_to_try.insert(0, self.model)
+        # Priorité aux modèles avec support d'outils fiable et sans erreurs de validation
+        models_to_try = ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.6-27b", self.model]
+        vus = set()
+        models_uniques = []
+        for m in models_to_try:
+            if m and m not in vus:
+                vus.add(m)
+                models_uniques.append(m)
 
         msgs_normalises = self._normaliser_pour_groq(messages)
         derniere_erreur = None
 
-        for model_name in models_to_try:
+        for model_name in models_uniques:
             payload = {
                 "model": model_name,
                 "messages": msgs_normalises,
@@ -289,13 +302,17 @@ class GroqClient(LLMClient):
                             logger.warning(f"Groq 429 sur {model_name} (tentative {tentative+1}) -> attente {2 * (tentative+1)}s...")
                             await asyncio.sleep(2.0 * (tentative + 1))
                             continue
+                        if response.status_code in (400, 404):
+                            logger.warning(f"Groq {response.status_code} outils sur {model_name} : {response.text}")
+                            derniere_erreur = response.text
+                            break
                         response.raise_for_status()
                         duree = time.perf_counter() - debut
                         message = response.json()["choices"][0]["message"]
                         logger.info(f"Groq chat_avec_outils : {duree:.1f}s ({model_name})")
                         return message
                 except httpx.HTTPStatusError as exc:
-                    derniere_erreur = exc
+                    derniere_erreur = f"{exc} ({exc.response.text if hasattr(exc, 'response') else ''})"
                     if exc.response.status_code == 429:
                         await asyncio.sleep(2.0)
                         continue

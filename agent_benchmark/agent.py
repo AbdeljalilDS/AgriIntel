@@ -75,7 +75,17 @@ class BenchmarkAgent:
     def _extraire_nom_outil(appel: dict) -> str:
         function = appel.get("function", {})
         if isinstance(function, dict):
-            return str(function.get("name", "")).strip()
+            raw_name = str(function.get("name", "")).strip()
+            raw_clean = raw_name.lower().replace("é", "e").replace("è", "e").replace("-", "_")
+            if "recherch" in raw_clean and "web" in raw_clean:
+                return "rechercher_web"
+            if "recherch" in raw_clean and "memoir" in raw_clean:
+                return "rechercher_memoire"
+            if "lire" in raw_clean or "page" in raw_clean:
+                return "lire_page"
+            if "enregistr" in raw_clean or "entite" in raw_clean or "entreprise" in raw_clean:
+                return "enregistrer_entreprise"
+            return raw_name
         return ""
 
     @staticmethod

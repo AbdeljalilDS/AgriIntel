@@ -195,21 +195,12 @@ div[data-testid="stMetricValue"] { color: var(--accent) !important; font-size: 2
 
 # ══════════════════════════════════════════════════════════════════════════
 # Helpers — données
-# ══════════════════════════════════════════════════════════════════════════
-
 def _run_async(coro):
-    """Exécute une coroutine dans Streamlit (qui a déjà un event loop)."""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Dans Streamlit, l'event loop tourne déjà — on crée un nouveau thread
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, coro)
-                return future.result()
-        return loop.run_until_complete(coro)
-    except RuntimeError:
-        return asyncio.run(coro)
+    """Exécute de manière sûre et isolée une coroutine async dans Streamlit."""
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(asyncio.run, coro)
+        return future.result()
 
 
 def charger_entites() -> list[dict]:
